@@ -1,4 +1,5 @@
 import re
+import math
 
 
 import logging
@@ -114,6 +115,15 @@ class MoonSimulator:
             logger.debug("\nAfter {} step(s):".format(self.step_count))
             logger.debug(self)
 
+    def step_axis(self, axis, do_debug = False):
+        assert axis >= 0 and axis <= 2
+        self.step_count += 1
+        self.apply_gravity_axis(axis)
+        self.apply_velocity_axis(axis)
+        if do_debug:
+            logger.debug("\nAfter {} step(s):".format(self.step_count))
+            logger.debug(self)
+
     def apply_gravity(self):
         for i in range(0, len(self.moons) - 1):
             for j in range(i+1, len(self.moons)):
@@ -132,6 +142,24 @@ class MoonSimulator:
             for a in range(0,3):
                 m.set_pos(a, m.pos(a) + m.vel(a))
 
+    def apply_gravity_axis(self, a):
+        assert a >= 0 and a <= 2
+        for i in range(0, len(self.moons) - 1):
+            for j in range(i+1, len(self.moons)):
+                m1 = self.moons[i]
+                m2 = self.moons[j]
+                if m1.pos(a) > m2.pos(a):
+                    m1.set_vel(a, m1.vel(a) - 1)
+                    m2.set_vel(a, m2.vel(a) + 1)
+                elif m1.pos(a) < m2.pos(a):
+                    m1.set_vel(a, m1.vel(a) + 1)
+                    m2.set_vel(a, m2.vel(a) - 1)
+
+    def apply_velocity_axis(self, a):
+        assert a >= 0 and a <= 2
+        for m in self.moons:
+            m.set_pos(a, m.pos(a) + m.vel(a))
+
     def __repr__(self):
         r = ""
         for m in self.moons:
@@ -148,3 +176,33 @@ class MoonSimulator:
             e += me
         logger.debug("Total energy: {}".format(e))
         return e
+
+    def reset_steps(self):
+        self.step_count = 0
+
+    def axis_key(self, a):
+        keys = []
+        for m in self.moons:
+            keys.append("({},{})".format(m.pos(a), m.vel(a)))
+        return ",".join(keys)
+
+    def get_axis_period(self, axis):
+        self.reset_steps()
+        seen = [self.axis_key(axis)]
+        self.step_axis(axis)
+        key = self.axis_key(axis)
+        while key not in seen:
+            self.step_axis(axis)
+            key = self.axis_key(axis)
+        return self.step_count
+
+    def get_period(self):
+        periods = []
+        for a in range(0, 3):
+            periods.append(self.get_axis_period(a))
+        # Lowest common multiple of the three axis periods is the period where all three axis
+        # will repeat
+        # lcm = (x*y)/gcd(x,y)
+        lcm1 = int((periods[0] * periods[1]) / math.gcd(periods[0], periods[1]))
+        lcm2 = int((lcm1 * periods[2]) / math.gcd(lcm1, periods[2]))
+        return lcm2
