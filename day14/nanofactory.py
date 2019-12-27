@@ -114,10 +114,10 @@ class NanoFactory:
         while lower < upper - 1:
             guess = math.floor((upper + lower) / 2)
             ore_needed_for_guess = self.produce(guess, chem_name)
-            logger.debug("Guess {} ORE -> {} FUEL".format(guess, ore_needed_for_guess))
+            logger.debug("Guess {} FUEL requires {} ORE".format(guess, ore_needed_for_guess))
             if ore_needed_for_guess <= ore_supply and ore_needed_for_guess > best_guess:
                 best_guess = guess
-                logger.debug("Best guess is now {} ORE".format(best_guess))
+                logger.debug("Best guess is now {} FUEL".format(best_guess))
             if ore_needed_for_guess < ore_supply:
                 lower = guess
                 logger.debug("lower = {}".format(lower))
