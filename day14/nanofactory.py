@@ -84,7 +84,7 @@ class NanoFactory:
     def produce(self, chem_number, chem_name):
         supply = collections.defaultdict(int)
         orders = multiprocessing.SimpleQueue()
-        orders.put(NanoFactoryChem(1, 'FUEL'))
+        orders.put(NanoFactoryChem(chem_number, chem_name))
         ore_needed = 0
         while not orders.empty():
             order = orders.get()
@@ -102,4 +102,26 @@ class NanoFactory:
                 supply[order.name] = leftover_amount
         return ore_needed
 
-
+    def output_capacity(self, ore_supply, chem_name):
+        """Determine how much of chem_name can be made with the given ore_supply"""
+        logger.debug("Given {} ORE, find how much {} can be produced".format(ore_supply, chem_name))
+        lower = 1
+        upper = 100
+        while self.produce(upper, chem_name) < ore_supply:
+            upper *= 2
+        logger.debug("Upper search limit = {}".format(upper))
+        best_guess = 1
+        while lower < upper - 1:
+            guess = math.floor((upper + lower) / 2)
+            ore_needed_for_guess = self.produce(guess, chem_name)
+            logger.debug("Guess {} ORE -> {} FUEL".format(guess, ore_needed_for_guess))
+            if ore_needed_for_guess <= ore_supply and ore_needed_for_guess > best_guess:
+                best_guess = guess
+                logger.debug("Best guess is now {} ORE".format(best_guess))
+            if ore_needed_for_guess < ore_supply:
+                lower = guess
+                logger.debug("lower = {}".format(lower))
+            else:
+                upper = guess
+                logger.debug("upper = {}".format(upper))
+        return best_guess

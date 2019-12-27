@@ -6,5 +6,11 @@ import nanofactory
 
 filename = sys.argv[1]
 
-print(nanofactory.NanoFactory(filename).produce(1, 'FUEL'))
+
+print(nanofactory.NanoFactory(filename).output_capacity(
+    1000000000000,
+    'FUEL'
+    ))
+
+
 
