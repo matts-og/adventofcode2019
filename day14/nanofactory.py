@@ -1,4 +1,6 @@
 import math
+import multiprocessing
+import collections
 
 import logging
 logger = logging.getLogger("nanofactory")
@@ -78,52 +80,26 @@ class NanoFactory:
             s += str(r) + "\n"
         return s
 
-    def produce_recurse(self, chem_number, chem_name, required_chems, surplus_chems):
-        if chem_name == 'ORE':
-            return
-        logger.debug("Produce {} {}".format(chem_number, chem_name))
-        assert chem_name in self.rules
-        r = self.rules[chem_name]
-        logger.debug("Rule: {}".format(r))
-        multiplier = math.floor(chem_number / r.output.count)
-        if chem_number % r.output.count != 0:
-            multiplier += 1
-        logger.debug("Multiplier = {}".format(multiplier))
-        for i in r.inputs:
-            require = i.count * multiplier
-            logger.debug("Input: {} require {}".format(i.name, require))
-            if i.name in surplus_chems and surplus_chems[i.name] > 0:
-                surplus = surplus_chems[i.name]
-                if surplus > require:
-                    require = 0
-                    surplus_chems[i.name] -= require
-                else:
-                    require -= surplus
-                    surplus_chems[i.name] = 0
-                logger.debug("Found {} in surplus".format(surplus))
-                logger.debug("Surplus for {} is now {}".format(i.name, surplus_chems[i.name]))
-            if require > 0:
-                if not i.name in required_chems:
-                    required_chems[i.name] = require
-                else:
-                    required_chems[i.name] += require
-                self.produce_recurse(require, i.name, required_chems, surplus_chems)
-        output_surplus = 0
-        if chem_number % r.output.count != 0:
-            output_surplus = r.output.count * multiplier - chem_number
-            logger.debug("{} output_surplus = {}".format(r.output.name, output_surplus))
-            if not r.output.name in surplus_chems:
-                surplus_chems[r.output.name] = output_surplus
-            else:
-                surplus_chems[r.output.name] += output_surplus
 
     def produce(self, chem_number, chem_name):
-        required_chems = {}
-        surplus_chems = {}
-        self.produce_recurse(chem_number, chem_name, required_chems, surplus_chems)
-        logger.debug("Required chems:")
-        logger.debug(required_chems)
-        logger.debug("Surplus chems:")
-        logger.debug(surplus_chems)
-        return required_chems['ORE']
+        supply = collections.defaultdict(int)
+        orders = multiprocessing.SimpleQueue()
+        orders.put(NanoFactoryChem(1, 'FUEL'))
+        ore_needed = 0
+        while not orders.empty():
+            order = orders.get()
+            if order.name == 'ORE':
+                ore_needed += order.count
+            elif order.count <= supply[order.name]:
+                supply[order.name] -= order.count
+            else:
+                amount_needed = order.count - supply[order.name]
+                recipe = self.rules[order.name]
+                batches = math.ceil(amount_needed / recipe.output.count)
+                for ingredient in recipe.inputs:
+                    orders.put(NanoFactoryChem(ingredient.count * batches, ingredient.name))
+                leftover_amount = recipe.output.count * batches - amount_needed
+                supply[order.name] = leftover_amount
+        return ore_needed
+
 
