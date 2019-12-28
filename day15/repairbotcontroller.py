@@ -19,10 +19,20 @@ class RepairBotController:
         self.grid = Grid(-1)
         self.row = 0
         self.col = 0
+        self.path = None
+        self.oxygen = None
+
+    def find_oxygen_best_path(self):
+        self.find_oxygen()
+        # Current position is on the oxygen so now we want to use a-star to find the best path back
+        # to the origin
+        res = self.nav_to((0,0), self.astar_neighbors_explore, self.astar_arrived_exact)
+        logger.debug(self.grid_to_str())
+        return res
 
     def find_oxygen(self):
         self.grid.put(self.row, self.col, 1)
-        self.unexplored = []
+        self.unexplored = set()
         done = False
         while not done:
             mvmt, new_row, new_col = self.find_oxygen_move()
@@ -41,10 +51,15 @@ class RepairBotController:
                 self.grid.put(new_row, new_col, 2)
                 self.row = new_row
                 self.col = new_col
+                self.oxygen = (new_row, new_col)
                 done = True
             else:
                 raise "Unknown status {}".format(status)
             logger.debug(self.grid_to_str())
+            logger.debug("position = {}".format(coord_to_str([self.row, self.col])))
+        assert self.oxygen != None
+        logger.debug("Oxygen found ({})".format(coord_to_str(self.oxygen)))
+
 
     def find_oxygen_move(self):
         north = (1, self.row - 1, self.col)
@@ -58,16 +73,26 @@ class RepairBotController:
                 can_go.append(mvmt)
                 if len(can_go) > 1:
                     # Make a list of coordinates we'll come back to later if we get to a dead end
-                    self.unexplored.append((mvmt[1], mvmt[2]))
+                    self.unexplored.add(coord_to_str([mvmt[1], mvmt[2]]))
+        res = None
         if len(can_go) > 0:
-            return can_go.pop(0)
+            res = can_go.pop(0)
+            self.path = None
         else:
-            self.path = self.nav_to(self.unexplored.pop())
-            return self.path_next()
+            if self.path == None:
+                self.path = self.nav_to(str_to_coord(self.unexplored.pop()),
+                                        self.astar_neighbors_in_grid,
+                                        self.astar_arrived_near_enough)
+            res = self.path_next()
+        self.remove_from_unexplored([res[1], res[2]])
+        return res
 
-    def nav_to(self, target):
+    def nav_to(self, target, neighbors_func, arrived_func):
+        # a-star based on wikipedia
+        logger.debug("nav_to {}".format(target))
         self.nav_target = target
-        start =  coord_to_str((self.row, self.col))
+        start = coord_to_str((self.row, self.col))
+        logger.debug("start = {}".format(start))
         # The set of discovered nodes that may need to be (re-)expanded.
         # Initially, only the start node is known.
         open_set = [start]
@@ -88,13 +113,14 @@ class RepairBotController:
             #current = the node in openSet having the lowest fScore[] value
             current = None
             for n in open_set:
-                if current == None or f_score[n] < current:
+                if current == None or f_score[n] < f_score[current]:
                     current = n
-            if current == coord_to_str(self.nav_target):
+            logger.debug("current = {}".format(current))
+            if arrived_func(current):
                 return self.reconstruct_path(came_from, current)
 
             open_set.remove(current)
-            for n_coord in self.neighbors(str_to_coord(current)):
+            for n_coord in neighbors_func(str_to_coord(current)):
                 n = coord_to_str(n_coord)
                 # d(current,n) is the weight of the edge from current to neighbor
                 # tentative_gScore is the distance from start to the neighbor through current
@@ -108,13 +134,32 @@ class RepairBotController:
                         open_set.append(n)
         return [] # path not found
 
+    def remove_from_unexplored(self, coord):
+        coord_str = None
+        if isinstance(coord, str):
+            coord_str = coord
+        else:
+            coord_str = coord_to_str([coord[0], coord[1]])
+        if coord_str in self.unexplored:
+            self.unexplored.remove(coord_str)
+
     def astar_heuristic(self, coord):
         # squared absolute distance from target
         a = self.nav_target[0] - coord[0]
         b = self.nav_target[1] - coord[1]
         return a * a + b * b
 
-    def neighbors(self, current):
+    def is_next_to(self, a, b):
+        if isinstance(a, str):
+            a = str_to_coord(a)
+        if isinstance(b, str):
+            b = str_to_coord(b)
+        row_adjacent = (abs(a[0] - b[0]) == 1) and (a[1] == b[1])
+        col_adjacent = (abs(a[1] - b[1]) == 1) and (a[0] == b[0])
+        return row_adjacent or col_adjacent
+
+    def astar_neighbors_in_grid(self, current):
+        """a-star neighbors function that gets only previously explored items from the grid"""
         north = (current[0] - 1, current[1])
         south = (current[0] + 1, current[1])
         west = (current[0], current[1] - 1)
@@ -125,6 +170,47 @@ class RepairBotController:
                 res.append(mvmt)
         return res
 
+    def astar_arrived_near_enough(self, current):
+        return current == coord_to_str(self.nav_target) or self.is_next_to(current, self.nav_target)
+
+    def astar_neighbors_explore(self, current):
+        """a-star neighbors function that explores as it goes"""
+        north = (1, current[0] - 1, current[1])
+        south = (2, current[0] + 1, current[1])
+        west = (3, current[0], current[1] - 1)
+        east = (4, current[0], current[1] + 1)
+        res = []
+        for mvmt in [north, south, east, west]:
+            grid_status = self.grid.get(mvmt[1], mvmt[2])
+            if grid_status == -1:
+                # explore this unknown location
+                self.movements.put(mvmt[0])
+                grid_status = self.statuses.get()
+                self.grid.put(mvmt[1], mvmt[2], grid_status)
+                logger.debug("Explored {} -> {}".format(coord_to_str((mvmt[1], mvmt[2])), grid_status))
+                if grid_status > 0:
+                    # move back so we can check the other neighbors
+                    backwards = None
+                    if mvmt[0] == 1:
+                        backwards = 2
+                    elif mvmt[0] == 2:
+                        backwards = 1
+                    elif mvmt[0] == 3:
+                        backwards = 4
+                    elif mvmt[0] == 4:
+                        backwards = 3
+                    else:
+                        raise "invalid mvmt {}".format(mvmt)
+                    self.movements.put(backwards)
+                    _ = self.statuses.get()
+            if grid_status > 0:
+                res.append((mvmt[1], mvmt[2]))
+        return res
+
+    def astar_arrived_exact(self, current):
+        return current == coord_to_str(self.nav_target)
+
+
     def distance(self, a, b):
         return 1
 
@@ -133,6 +219,8 @@ class RepairBotController:
         while current in came_from:
             current = came_from[current]
             total_path = [str_to_coord(current)] + total_path
+        total_path.pop(0)
+        logger.debug("total_path = {}".format(total_path))
         return total_path
 
     def path_next(self):
