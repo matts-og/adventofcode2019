@@ -21,21 +21,46 @@ class RepairBotController:
         self.col = 0
         self.path = None
         self.oxygen = None
+        self.unexplored = set()
+        self.grid.put(self.row, self.col, 1)
+
+    def find_oxygen_fill_time(self):
+        self.explore(False)
+        all_g_scores = defaultdict(lambda: 1e10)
+        def func(self, row, col, value):
+            if self.grid.get(row, col) < 1:
+                # don't bother with unreachable locations
+                return
+            if not coord_to_str((row, col)) in all_g_scores.keys():
+                self.nav(self.oxygen, (row, col), self.astar_neighbors_in_grid, self.astar_arrived_exact)
+                all_g_scores.update(self.g_score)
+        self.grid.visit(func, self)
+        #logger.debug("g_scores = {}".format(all_g_scores))
+        max_g = None
+        for g in all_g_scores.values():
+            if max_g == None or g > max_g:
+                max_g = g
+        return max_g
 
     def find_oxygen_best_path(self):
-        self.find_oxygen()
-        # Current position is on the oxygen so now we want to use a-star to find the best path back
-        # to the origin
-        res = self.nav_to((0,0), self.astar_neighbors_explore, self.astar_arrived_exact)
+        # use a-star to find the best path from the oxygen to the origin
+        self.explore(False)
+        res = self.nav(self.oxygen, (0,0), self.astar_neighbors_in_grid, self.astar_arrived_exact)
         logger.debug(self.grid_to_str())
         return res
 
     def find_oxygen(self):
-        self.grid.put(self.row, self.col, 1)
-        self.unexplored = set()
+        self.explore(True)
+        assert self.oxygen != None
+        logger.debug("Oxygen found ({})".format(coord_to_str(self.oxygen)))
+
+    def explore(self, stop_at_oxygen = True):
         done = False
         while not done:
-            mvmt, new_row, new_col = self.find_oxygen_move()
+            mvmt, new_row, new_col = self.explore_move()
+            if mvmt == None:
+                # We've explored everywhere
+                break
             self.movements.put(mvmt)
             status = self.statuses.get()
             if status == 0:
@@ -52,16 +77,13 @@ class RepairBotController:
                 self.row = new_row
                 self.col = new_col
                 self.oxygen = (new_row, new_col)
-                done = True
+                done = stop_at_oxygen
             else:
                 raise "Unknown status {}".format(status)
             logger.debug(self.grid_to_str())
             logger.debug("position = {}".format(coord_to_str([self.row, self.col])))
-        assert self.oxygen != None
-        logger.debug("Oxygen found ({})".format(coord_to_str(self.oxygen)))
 
-
-    def find_oxygen_move(self):
+    def explore_move(self):
         north = (1, self.row - 1, self.col)
         south = (2, self.row + 1, self.col)
         west = (3, self.row, self.col - 1)
@@ -79,20 +101,24 @@ class RepairBotController:
             res = can_go.pop(0)
             self.path = None
         else:
-            if self.path == None:
-                self.path = self.nav_to(str_to_coord(self.unexplored.pop()),
+            if self.path == None and len(self.unexplored) > 0:
+                target = self.unexplored.pop()
+                self.unexplored.add(target)
+                self.path = self.nav((self.row, self.col), str_to_coord(target),
                                         self.astar_neighbors_in_grid,
                                         self.astar_arrived_near_enough)
             res = self.path_next()
-        self.remove_from_unexplored([res[1], res[2]])
+        if res[0] != None:
+            self.remove_from_unexplored([res[1], res[2]])
         return res
 
-    def nav_to(self, target, neighbors_func, arrived_func):
+    def nav(self, start_coord, target, neighbors_func, arrived_func):
         # a-star based on wikipedia
         logger.debug("nav_to {}".format(target))
         self.nav_target = target
-        start = coord_to_str((self.row, self.col))
+        start = coord_to_str(start_coord)
         logger.debug("start = {}".format(start))
+
         # The set of discovered nodes that may need to be (re-)expanded.
         # Initially, only the start node is known.
         open_set = [start]
@@ -102,20 +128,22 @@ class RepairBotController:
         came_from = {}
 
         # For node n, gScore[n] is the cost of the cheapest path from start to n currently known.
-        g_score = defaultdict(lambda: 1e10)
-        g_score[start] = 0
+        self.g_score = defaultdict(lambda: 1e10)
+        self.g_score[start] = 0
 
         # For node n, fScore[n] := gScore[n] + h(n).
-        f_score = defaultdict(lambda: 1e10)
+        f_score = {}
         f_score[start] = self.astar_heuristic(str_to_coord(start))
 
         while len(open_set) > 0:
             #current = the node in openSet having the lowest fScore[] value
             current = None
             for n in open_set:
+                if not n in f_score:
+                    f_score[n] = self.g_score[n] + self.astar_heuristic(str_to_coord(n))
                 if current == None or f_score[n] < f_score[current]:
                     current = n
-            logger.debug("current = {}".format(current))
+            #logger.debug("current = {}".format(current))
             if arrived_func(current):
                 return self.reconstruct_path(came_from, current)
 
@@ -124,12 +152,12 @@ class RepairBotController:
                 n = coord_to_str(n_coord)
                 # d(current,n) is the weight of the edge from current to neighbor
                 # tentative_gScore is the distance from start to the neighbor through current
-                tentative_g_score = g_score[current] + self.distance(current, n)
-                if tentative_g_score < g_score[n]:
+                tentative_g_score = self.g_score[current] + self.distance(current, n)
+                if tentative_g_score < self.g_score[n]:
                     # This path to neighbor is better than any previous one. Record it!
                     came_from[n] = current
-                    g_score[n] = tentative_g_score
-                    f_score[n] = g_score[n] + self.astar_heuristic(n_coord)
+                    self.g_score[n] = tentative_g_score
+                    f_score[n] = self.g_score[n] + self.astar_heuristic(n_coord)
                     if not n in open_set:
                         open_set.append(n)
         return [] # path not found
@@ -210,7 +238,6 @@ class RepairBotController:
     def astar_arrived_exact(self, current):
         return current == coord_to_str(self.nav_target)
 
-
     def distance(self, a, b):
         return 1
 
@@ -220,23 +247,26 @@ class RepairBotController:
             current = came_from[current]
             total_path = [str_to_coord(current)] + total_path
         total_path.pop(0)
-        logger.debug("total_path = {}".format(total_path))
+        #logger.debug("total_path = {}".format(total_path))
         return total_path
 
     def path_next(self):
-        n = self.path.pop(0)
-        d = None
-        if self.row - n[0] == 1:
-            d = 1  # north
-        elif self.row - n[0] == -1:
-            d = 2  # south
-        elif self.col - n[1] == 1:
-            d = 3  # west
-        elif self.col - n[1] == -1:
-            d = 4  # east
+        if self.path != None and len(self.path) > 0:
+            n = self.path.pop(0)
+            d = None
+            if self.row - n[0] == 1:
+                d = 1  # north
+            elif self.row - n[0] == -1:
+                d = 2  # south
+            elif self.col - n[1] == 1:
+                d = 3  # west
+            elif self.col - n[1] == -1:
+                d = 4  # east
+            else:
+                raise "Got lost"
+            return (d, n[0], n[1])
         else:
-            raise "Got lost"
-        return (d, n[0], n[1])
+            return (None, None, None)
 
     def get_grid(self):
         return self.grid
