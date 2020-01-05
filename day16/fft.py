@@ -34,24 +34,28 @@ class FFT:
         self.results = []  # [phase][element]
         self.results.append(self.input)
         for phase in range(1, phases+1):
-            self.results.append([0] * len(self.input))
+            self.results.append([-1] * len(self.input))
         logger.debug("Starting main loop")
         # each element is only dependent on the elements that come after it so 
         # if we work backwards, we can calculate all the phases for an element
         # reusing the results as we go. Also we can stop as soon as we get to
         # the message offset
         progress = []
-        progress_check_mod = int((len(self.input) - self.message_offset) / 100)
-        for element in reversed(range(self.message_offset, len(self.input))):
-            for phase in range(1, phases+1):
-                val = 0
-                for idx in range(element, len(self.input)):
-                    val += self.results[phase-1][idx] * self.get_pattern(element, idx)
+        progress_check_mod = int(phases / 100)
+        for phase in range(1, phases+1):
+            prev = -1
+            for element in reversed(range(self.message_offset, len(self.input))):
+                if prev > 0 and element > math.ceil(len(self.input) / 2):
+                    val = prev + self.results[phase-1][element] * self.get_pattern(element, element)
+                    #logger.debug("element={}, prev={}, val={}".format(element, prev, val))
+                else:
+                    val = 0
+                    for idx in range(element, len(self.input)):
+                        val += self.results[phase-1][idx] * self.get_pattern(element, idx)
+                prev = val
                 self.results[phase][element] = abs(val) % 10
-            if element % progress_check_mod == 0:
-                percent_done = 100 - math.floor((element - self.message_offset) 
-                                            / (len(self.input) - self.message_offset)
-                                            * 100)
+            if progress_check_mod > 0 and phase % progress_check_mod == 0:
+                percent_done = int(phase / phases * 100)
                 if len(progress) < percent_done:
                     logger.debug("Progress {} %".format(percent_done))
                     progress.append(percent_done)
@@ -71,14 +75,14 @@ class FFT:
         return "".join([str(x) for x in self.input[self.message_offset:self.message_offset+8]])
 
     def get_pattern(self, element, idx):
-        return PATTERN_SEED[math.floor(idx/(element + 1)) + 1]
+        return PATTERN_SEED[math.floor((idx+1)/(element + 1)) % 4]
 
     def gen_patterns(self):
         logger.debug("gen_patterns")
         self.patterns = []
         for element in range(0, len(self.input)):
-            pattern = []
-            while len(pattern) < len(self.input) + 1:
-                for p in [0, 1, 0, -1]:
-                    pattern += [p] * (element + 1)
-            self.patterns.append(pattern[1:len(self.input)+1])
+            row = []
+            for idx in range(0, len(self.input)):
+                row.append(self.get_pattern(element, idx))
+            self.patterns.append(row)
+                
